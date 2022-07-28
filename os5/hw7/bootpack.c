@@ -8,7 +8,11 @@ void init_palette(void);
 void set_palette(int start, int end, unsigned char *rgb);
 void boxfill8(unsigned char *vram, int xsize, unsigned char c, int x0, int y0, int x1, int y1);
 void init_screen(char *vram, int x, int y);
-
+void init_gdtidt(void);
+void set_segmdesc(struct SEGMENT_DESCRIPTOR *sd, unsigned int limit, int base, int ar);
+void set_gatedesc(struct GATE_DESCRIPTOR *gd, int offset, int selector, int ar);
+void load_gdtr(int limit, int addr);
+void load_idtr(int limit, int addr);
 #define COL8_000000 0
 #define COL8_FF0000 1
 #define COL8_00FF00 2
@@ -35,6 +39,76 @@ struct BOOTINFO
 static char font_A[16] = {
 	0x00, 0x18, 0x18, 0x18, 0x18, 0x24, 0x24, 0x24,
 	0x24, 0x7e, 0x42, 0x42, 0x42, 0xe7, 0x00, 0x00};
+
+// 段表数据结果
+struct SEGMENT_DESCRIPTOR {
+	short limit_low, base_low;
+	char base_mid, access_right;
+	char limit_high, base_high;
+};
+// 中断表数据结构
+struct GATE_DESCRIPTOR {
+	short offset_low, selector;
+	char dw_count, access_right;
+	short offset_high;
+};
+
+void init_gdtidt(void)
+{
+	// 地址赋值
+	struct SEGMENT_DESCRIPTOR *gdt = (struct SEGMENT_DESCRIPTOR *) 0x00270000;
+	struct GATE_DESCRIPTOR    *idt = (struct GATE_DESCRIPTOR    *) 0x0026f800;
+	int i;
+
+	/* GDT的初始化 */
+	for (i = 0; i < 8192; i++) {
+		// short是1，char是2，struct一个就栈8字节
+		// 所以进行加1，并不是地址加1，而是加8地址
+		set_segmdesc(gdt + i, 0, 0, 0);
+		// 将它们的上限（limit-段的字节数-1）、基址（base）、访问权限都设为0。
+
+	}
+	// 0xffffffff，这个地址表示4gb，段最大
+	set_segmdesc(gdt + 1, 0xffffffff, 0x00000000, 0x4092);
+	set_segmdesc(gdt + 2, 0x0007ffff, 0x00280000, 0x409a);
+	// 上限值为0x0007ffff(大小为512KB)，地址是0x280000，这正好是为bootpack.hrb准备的。用这个段，就可以执行bootpack.hrb，bootpack.hrb是以ORG 0为前提翻译成的机器语言
+	load_gdtr(0xffff, 0x00270000);
+
+	/* IDT的初始化 */
+	for (i = 0; i < 256; i++) {
+		set_gatedesc(idt + i, 0, 0, 0);
+	}
+	// 使用汇编进行赋值
+	load_idtr(0x7ff, 0x0026f800);
+
+	return;
+}
+
+void set_segmdesc(struct SEGMENT_DESCRIPTOR *sd, unsigned int limit, int base, int ar)
+{
+	if (limit > 0xfffff) {
+		ar |= 0x8000; /* G_bit = 1 */
+		limit /= 0x1000;
+	}
+	sd->limit_low    = limit & 0xffff;
+	sd->base_low     = base & 0xffff;
+	sd->base_mid     = (base >> 16) & 0xff;
+	sd->access_right = ar & 0xff;
+	sd->limit_high   = ((limit >> 16) & 0x0f) | ((ar >> 8) & 0xf0);
+	sd->base_high    = (base >> 24) & 0xff;
+	return;
+}
+
+void set_gatedesc(struct GATE_DESCRIPTOR *gd, int offset, int selector, int ar)
+{
+	gd->offset_low   = offset & 0xffff;
+	gd->selector     = selector;
+	gd->dw_count     = (ar >> 8) & 0xff;
+	gd->access_right = ar & 0xff;
+	gd->offset_high  = (offset >> 16) & 0xffff;
+	return;
+}
+
 
 void HariMain(void)
 {
